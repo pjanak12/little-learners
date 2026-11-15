@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
 <title>Little Learners Garden</title>
 <meta name="description" content="Gentle learning games for ages 6 to 8.">
 <meta name="theme-color" content="#FFFFFF">
@@ -274,10 +276,28 @@ const MONTHS=['January','February','March','April','May','June','July','August',
 const app=document.getElementById('app');
 
 let S=null;
-function load(){try{const r=localStorage.getItem(KEY);return r?JSON.parse(r):null}catch(e){return null}}
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
-function defaults(){return{profile:{name:'',age:6,buddy:'🦁'},pin:'',settings:{daily:20,roundLen:5,breakEvery:10,bedOn:true,bedStart:'20:00',bedEnd:'07:00',sound:true,voice:true,subjects:Object.fromEntries(SKILLS.map(s=>[s.id,true]))},levels:Object.fromEntries(SKILLS.map(s=>[s.id,2])),tbest:{},log:{},extra:{},bedOk:'',demo:false}}
-S=load();
+const KEY2='littleLearners.v2';
+let ROOT=null;
+function newId(){return 'k'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
+function load(){try{const r=localStorage.getItem(KEY2);if(r)return JSON.parse(r);const o=localStorage.getItem(KEY);if(o){const old=JSON.parse(o);const id=newId();const lp=old.pin;delete old.pin;return{v:2,legacyPin:lp,active:id,kids:{[id]:old},sec:{fails:0,lockUntil:0,lastSeen:0,clock:0}}}}catch(e){}return null}
+function save(){if(!ROOT)return;try{localStorage.setItem(KEY2,JSON.stringify(ROOT))}catch(e){}}
+// ---------- security helpers: PIN is never stored, only a salted PBKDF2 hash
+const enc=new TextEncoder();
+const hex=b=>[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');
+function newSalt(){const a=new Uint8Array(16);crypto.getRandomValues(a);return hex(a)}
+async function kdf(secret,salt){try{const k=await crypto.subtle.importKey('raw',enc.encode(secret),'PBKDF2',false,['deriveBits']);const b=await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:enc.encode(salt),iterations:150000},k,256);return hex(b)}catch(e){let h=2166136261>>>0;const t=salt+'|'+secret;for(let r=0;r<40000;r++)for(let i=0;i<t.length;i++){h^=(t.charCodeAt(i)+r)&255;h=Math.imul(h,16777619)>>>0}return 'f'+h.toString(16)}}
+async function setPin(pin){ROOT.salt=newSalt();ROOT.pinHash=await kdf(pin,ROOT.salt);save()}
+async function checkPin(pin){return !!ROOT.pinHash&&(await kdf(pin,ROOT.salt))===ROOT.pinHash}
+function makeCode(){const A='ABCDEFGHJKMNPQRSTUVWXYZ23456789',a=new Uint8Array(8);crypto.getRandomValues(a);const c=[...a].map(x=>A[x%A.length]).join('');return c.slice(0,4)+'-'+c.slice(4)}
+async function setRecovery(){const code=makeCode();ROOT.recSalt=newSalt();ROOT.recHash=await kdf(code.replace('-',''),ROOT.recSalt);save();return code}
+const locked=()=>Date.now()<(ROOT.sec.lockUntil||0);
+const lockMsg=()=>`Too many tries. Please wait ${Math.ceil((ROOT.sec.lockUntil-Date.now())/60000)} min.`;
+function failTry(){ROOT.sec.fails=(ROOT.sec.fails||0)+1;if(ROOT.sec.fails>=5)ROOT.sec.lockUntil=Date.now()+60000*Math.min(30,2**(ROOT.sec.fails-5));save()}
+function defaults(){return{profile:{name:'',age:6,buddy:'🦁'},settings:{daily:20,roundLen:5,breakEvery:10,bedOn:true,bedStart:'20:00',bedEnd:'07:00',sound:true,voice:true,subjects:Object.fromEntries(SKILLS.map(s=>[s.id,true]))},levels:Object.fromEntries(SKILLS.map(s=>[s.id,2])),tbest:{},log:{},extra:{},bedOk:'',demo:false}}
+ROOT=load();S=ROOT?ROOT.kids[ROOT.active]:null;
+if(ROOT){if(!ROOT.sec)ROOT.sec={fails:0,lockUntil:0,lastSeen:0,clock:0};Object.values(ROOT.kids).forEach(k=>{if(!k.tbest)k.tbest={};SKILLS.forEach(x=>{if(k.levels[x.id]==null)k.levels[x.id]=2;if(k.settings.subjects[x.id]==null)k.settings.subjects[x.id]=true})});
+  if(ROOT.legacyPin){const lp=ROOT.legacyPin;delete ROOT.legacyPin;setPin(lp).then(()=>{try{localStorage.removeItem(KEY)}catch(e){}})}}
+function useKid(id){ROOT.active=id;S=ROOT.kids[id];sinceBreak=(S.brk&&S.brk.d===dkey())?S.brk.s:0}
 if(S){SKILLS.forEach(k=>{if(S.levels[k.id]==null)S.levels[k.id]=2;if(S.settings.subjects[k.id]==null)S.settings.subjects[k.id]=true});if(!S.tbest)S.tbest={}}
 
 function day(k=dkey()){if(!S.log[k])S.log[k]={sec:0,rounds:0,stars:0,skills:{}};return S.log[k]}
@@ -390,7 +410,7 @@ function genLang(d,lang){
 function gen(id,d){if(id==='math')return genMath(d);if(id==='think')return genThink(d);if(id==='puzzle')return genPuzzle(d);if(id==='words')return genWords(d);return genLang(d,id)}
 
 // ---------- state
-let VS='vs last month',screen='home',R=null,parentTab='report',reportYM=ymOf(),breakAt=0,sinceBreak=0,pinCb=null,pinBuf='',setupState=null;
+let VS='vs last month',screen='home',R=null,parentTab='report',reportYM=ymOf(),breakAt=0,sinceBreak=(S&&S.brk&&S.brk.d===dkey())?S.brk.s:0,pinCb=null,pinBuf='',setupState=null;
 
 // ---------- header
 function header(){
@@ -402,11 +422,12 @@ function header(){
 
 // ---------- lock checks
 function inBedtime(){if(!S.settings.bedOn||S.bedOk===dkey())return false;const now=new Date(),cur=now.getHours()*60+now.getMinutes();const [a,b]=S.settings.bedStart.split(':').map(Number),[c,e]=S.settings.bedEnd.split(':').map(Number);const st=a*60+b,en=c*60+e;return st<en?(cur>=st&&cur<en):(cur>=st||cur<en)}
-function gate(){if(inBedtime())return'bed';if(remainSec()<=0)return'time';return null}
+function gate(){if(ROOT&&ROOT.sec.clock)return'clock';if(inBedtime())return'bed';if(remainSec()<=0)return'time';return null}
 
 // ---------- screens
 let lastScreen='';
 function render(){
+  if(screen==='recovery'){renderRecovery();return}
   if(!S){renderSetup();return}
   if(screen!==lastScreen){lastScreen=screen;try{window.scrollTo(0,0)}catch(e){}}
   const g=gate();
@@ -428,15 +449,24 @@ function renderSetup(){
    <div class="field"><label for="sPin">Grown-up PIN (4 digits)</label><input id="sPin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" required placeholder="••••"><span class="note" style="text-align:left">Needed to open settings, reports and extra time.</span></div>
    <button class="btn" type="submit">Start learning</button>
   </form>
-  <button class="linkbtn" data-act="demo">Or explore with a sample child (PIN 1234)</button>
   </div></div>`;
   document.getElementById('setupForm').addEventListener('submit',ev=>{ev.preventDefault();
     const name=document.getElementById('sName').value.trim(),pin=document.getElementById('sPin').value.trim();
     if(!name)return toast('Please type a name');if(!/^\d{4}$/.test(pin))return toast('PIN must be 4 numbers');
-    S=defaults();S.profile={name,age:s.age,buddy:s.buddy};S.pin=pin;S.settings.daily=+document.getElementById('sDaily').value;save();screen='home';render();});
+    const kid=defaults();kid.profile={name,age:s.age,buddy:s.buddy};kid.settings.daily=+document.getElementById('sDaily').value;const id=newId();
+    ROOT={v:2,active:id,kids:{[id]:kid},sec:{fails:0,lockUntil:0,lastSeen:Date.now(),clock:0}};S=kid;
+    setPin(pin).then(setRecovery).then(code=>{recCode=code;screen='recovery';render()});});
   document.getElementById('sName').addEventListener('input',e=>s.name=e.target.value);
 }
 
+let recCode='';
+function renderRecovery(){
+  app.innerHTML=`<div class="wrap"><div class="setup panel" style="gap:14px;text-align:center"><div class="logo">🔑</div><h1>Your recovery code</h1>
+  <p class="note" style="font-size:1rem">If you forget your PIN, this code is the only way to reset it. Write it down and keep it away from your child.</p>
+  <div class="qbig" style="letter-spacing:.12em;user-select:all;-webkit-user-select:all">${recCode}</div>
+  <p class="note">It will not be shown again. You can make a new one later in Grown-ups → Controls.</p>
+  <button class="btn" data-act="recdone">I wrote it down</button></div></div>`;
+}
 function renderHome(){
   const on=SKILLS.filter(s=>S.settings.subjects[s.id]);
   app.innerHTML=header()+`<div class="wrap">
@@ -521,7 +551,7 @@ function renderStars(){
 // Break & lock
 let breakLeft=0,breakTimer=null;
 const STRETCH=['Stretch up tall like a giraffe 🦒','Hop five times like a frog 🐸','Flap your arms like a bird 🐦','Stomp slowly like an elephant 🐘','Take three deep breaths like a sleepy panda 🐼'];
-function startBreak(){screen='break';breakLeft=30;sinceBreak=0;render();clearInterval(breakTimer);breakTimer=setInterval(()=>{breakLeft--;if(breakLeft<=0){clearInterval(breakTimer)}if(screen==='break')renderBreak()},1000)}
+function startBreak(){screen='break';breakLeft=30;sinceBreak=0;S.brk={d:dkey(),s:0};save();render();clearInterval(breakTimer);breakTimer=setInterval(()=>{breakLeft--;if(breakLeft<=0){clearInterval(breakTimer)}if(screen==='break')renderBreak()},1000)}
 function renderBreak(){
   const pct=(30-breakLeft)/30,C=2*Math.PI*52;
   app.innerHTML=header()+`<div class="wrap"><div class="center"><div class="hero-ani">🦒</div><h2>Wiggle break!</h2><p>${STRETCH[Math.floor((30-breakLeft)/6)%STRETCH.length]}</p>
@@ -529,6 +559,7 @@ function renderBreak(){
   <button class="btn" data-act="home" ${breakLeft>0?'disabled':''}>I’m ready!</button></div></div>`;
 }
 function renderLock(kind){
+  if(kind==='clock'){app.innerHTML=header()+`<div class="wrap"><div class="center"><div class="hero-ani">⏰</div><h2>Please ask a grown-up</h2><p>The clock on this device changed, so the games are paused.</p><button class="linkbtn" data-act="unclock">Grown-up: unlock</button></div></div>`;return}
   const bed=kind==='bed';
   app.innerHTML=header()+`<div class="wrap"><div class="center"><div class="hero-ani">${bed?'🦉':'🐼'}</div>
   <h2>${bed?`Sleepy time, ${esc(S.profile.name)}!`:`Great learning today, ${esc(S.profile.name)}!`}</h2>
@@ -683,8 +714,9 @@ function dailyChart(ym,st){
   return`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Minutes played each day">${g}</svg>`;
 }
 function renderParent(){
-  app.innerHTML=`<div class="wrap"><div class="ptop"><h1>Grown-ups area</h1><div class="tabs"><button class="${parentTab==='report'?'on':''}" data-act="ptab" data-v="report">Monthly report</button><button class="${parentTab==='settings'?'on':''}" data-act="ptab" data-v="settings">Controls</button></div><button class="btn sm" data-act="home">Back to games</button></div>
-  ${parentTab==='report'?reportHTML():settingsHTML()}</div>`;
+  app.innerHTML=`<div class="wrap"><div class="ptop"><h1>Grown-ups area</h1><div class="tabs"><button class="${parentTab==='report'?'on':''}" data-act="ptab" data-v="report">Report</button><button class="${parentTab==='settings'?'on':''}" data-act="ptab" data-v="settings">Controls</button><button class="${parentTab==='kids'?'on':''}" data-act="ptab" data-v="kids">Children</button></div><button class="btn sm" data-act="home">Back to games</button></div>
+  ${parentTab==='report'?reportHTML():parentTab==='kids'?kidsHTML():settingsHTML()}</div>`;
+  parentTouch();
   if(parentTab==='settings')bindSettings();
 }
 function reportHTML(){
@@ -709,6 +741,19 @@ function reportHTML(){
   <section class="panel"><h2>What we noticed</h2>${ins.join('')||'<p class="note">Insights appear after a few games.</p>'}</section></div>
   <section class="panel"><h2>Tracing medals</h2><div class="medalrow" style="justify-content:flex-start">${[['🥇','Gold',st.medals.g],['🥈','Silver',st.medals.s],['🥉','Bronze',st.medals.b]].map(([e,l,n])=>`<div class="mcell"><div style="font-size:2rem">${e}</div><div class="mch" style="font-size:1.6rem">${n}</div><div class="mini">${l}</div></div>`).join('')}</div><p class="note" style="text-align:left;margin:0">Gold is 85+ neatness, silver 65+, bronze 40+. Below that, children get a practice ribbon and a specific tip, not a zero.</p></section>
   <section class="panel"><h2>Minutes played each day</h2><div class="chart">${dailyChart(ym,st)}</div></section>`;
+}
+let addKid=null,delKid=null;
+function kidsHTML(){
+  const ks=Object.entries(ROOT.kids);
+  return `<section class="panel"><h2>Children on this device</h2>${ks.map(([id,k])=>`<div class="toggle"><span style="display:flex;gap:10px;align-items:center;min-width:0"><span style="font-size:30px">${k.profile.buddy}</span><span style="min-width:0"><b>${esc(k.profile.name)}</b><br><small style="color:var(--ink-soft)">Age ${k.profile.age} · ${k.settings.daily} min a day</small></span></span>
+   <span class="rowbtns" style="gap:6px">${id===ROOT.active?'<span class="tag">Playing now</span>':`<button class="btn sm" data-act="kidswitch" data-v="${id}">Switch</button>`}${ks.length>1?(delKid===id?`<button class="btn sm" style="background:var(--bad);box-shadow:0 4px 0 #9A3216" data-act="kiddel2" data-v="${id}">Yes, remove</button>`:`<button class="btn sm alt" data-act="kiddel" data-v="${id}">Remove</button>`):''}</span></div>`).join('')}
+   ${delKid?'<p class="note" style="text-align:left">Removing a child deletes their stars and reports on this device.</p>':''}</section>
+  <section class="panel"><h2>Add another child</h2>${addKid?`<div class="form">
+   <div class="field"><label for="kName">Child’s name</label><input id="kName" maxlength="20" value="${esc(addKid.name)}" placeholder="Name"></div>
+   <div class="field"><span class="flabel">Age</span><div class="seg">${[6,7,8].map(a=>`<button data-act="kAge" data-v="${a}" class="${addKid.age===a?'on':''}">${a} years</button>`).join('')}</div></div>
+   <div class="field"><span class="flabel">Animal buddy</span><div class="buddies">${BUDDIES.map(b=>`<button data-act="kBuddy" data-v="${b}" class="${addKid.buddy===b?'on':''}">${b}</button>`).join('')}</div></div>
+   <div class="field"><label for="kDaily">Daily play time</label><select id="kDaily">${[10,15,20,30,45,60].map(v=>`<option value="${v}" ${addKid.daily===v?'selected':''}>${v} minutes</option>`).join('')}</select></div>
+   <div class="rowbtns"><button class="btn sm alt" data-act="kcancel">Cancel</button><button class="btn sm" data-act="ksave">Add child</button></div></div>`:`<p class="note" style="text-align:left;margin:0">Each child gets their own name, buddy, level, time limit, stars and monthly report. The same grown-up PIN covers everyone.</p><div><button class="btn sm" data-act="kadd">+ Add a child</button></div>`}</section>`;
 }
 function settingsHTML(){
   const s=S.settings;
@@ -736,6 +781,8 @@ function settingsHTML(){
    <li><b>Short and limited.</b> Games are 3 to 5 items, with breaks and daily limits you set, in line with the American Academy of Pediatrics’ advice to set consistent screen-time limits for school-age children.</li></ul></section>
   <section class="panel"><h2>How this app keeps play healthy</h2><ul class="principles"><li>Games end after a few questions. No endless scrolling or autoplay.</li><li>No streaks, leaderboards, ads, or in-app buying.</li><li>Wrong answers get a kind hint. The right answer is shown after two tries.</li><li>Difficulty adjusts quietly after each game so it stays “just right”.</li><li>Daily limit, wiggle breaks and bedtime lock are set by you.</li><li>All progress stays on this device.</li></ul></section>
   <section class="panel"><h2>Security & data</h2><div class="form"><div class="field"><label for="pPin">Change PIN</label><div class="seg"><input id="pPin" type="password" inputmode="numeric" maxlength="4" placeholder="New 4-digit PIN" style="flex:1;border:2px solid var(--line);border-radius:12px;padding:12px"><button data-act="setpin">Save PIN</button></div></div>
+   <button class="btn alt sm" data-act="newrec">Make a new recovery code</button><div id="recout"></div>
+   <p class="note" style="text-align:left;margin:0">Your PIN is stored only as a scrambled (hashed) value. After 5 wrong tries the PIN pad locks for a while.</p>
    <button class="btn alt sm" data-act="loaddemo">Fill report with sample months</button>
    <div class="danger" id="dz"><span style="flex:1">Clear all progress and stars?</span><button class="btn sm" style="background:var(--bad);box-shadow:0 4px 0 #9A3216" data-act="askreset">Clear progress</button></div></div></section></div>`;
 }
@@ -760,7 +807,8 @@ function fillDemo(){
 }
 
 // ---------- PIN overlay
-function askPin(title,cb){pinCb=cb;pinBuf='';drawPin(title,'')}
+let pinBusy=false;
+function askPin(title,cb){pinCb=cb;pinBuf='';pinBusy=false;drawPin(title,locked()?lockMsg():'')}
 function drawPin(title,err){
   let ov=document.getElementById('pinov');if(!ov){ov=document.createElement('div');ov.id='pinov';ov.className='overlay';document.body.appendChild(ov)}ov.dataset.title=title;
   ov.innerHTML=`<div class="pinbox" role="dialog" aria-label="${esc(title)}"><h3>${esc(title)}</h3><div class="note">Enter the 4-digit grown-up PIN</div><div class="pindots">${[0,1,2,3].map(i=>`<span class="${i<pinBuf.length?'f':''}"></span>`).join('')}</div><div class="err">${err}</div>
@@ -768,8 +816,7 @@ function drawPin(title,err){
   <button class="linkbtn" data-act="forgot" style="font-size:.85rem">Forgot PIN?</button></div>`;
 }
 function closePin(){const ov=document.getElementById('pinov');if(ov)ov.remove();pinCb=null}
-let forgotQ=null;
-function showForgot(){const a=ri(12,19),b=ri(6,9);forgotQ=a*b;const ov=document.getElementById('pinov');ov.innerHTML=`<div class="pinbox"><h3>Grown-up check</h3><div class="note">Answer to reset the PIN to 0000.</div><div class="qbig">${a} × ${b} = ?</div><input id="fq" inputmode="numeric" style="border:2px solid var(--line);border-radius:12px;padding:12px;width:100%;font-size:1.2rem;text-align:center"><div class="err" id="fqe"></div><div class="rowbtns"><button class="btn sm alt" data-act="pcancel">Cancel</button><button class="btn sm" data-act="fqok">Reset PIN</button></div></div>`}
+function showForgot(err=''){const ov=document.getElementById('pinov');ov.innerHTML=`<div class="pinbox"><h3>Forgot PIN</h3><div class="note">Type the recovery code you wrote down when you set up the app.</div><input id="fq" autocapitalize="characters" autocomplete="off" maxlength="9" placeholder="XXXX-XXXX" style="border:2px solid var(--line);border-radius:12px;padding:12px;width:100%;font-size:1.2rem;text-align:center;letter-spacing:.1em"><input id="fp" type="password" inputmode="numeric" maxlength="4" placeholder="New 4-digit PIN" style="border:2px solid var(--line);border-radius:12px;padding:12px;width:100%;font-size:1.1rem;text-align:center"><div class="err" id="fqe">${err}</div><div class="rowbtns"><button class="btn sm alt" data-act="pcancel">Cancel</button><button class="btn sm" data-act="fqok">Reset PIN</button></div></div>`}
 
 // ---------- toast
 function toast(t){const o=document.querySelector('.toast');if(o)o.remove();const el=document.createElement('div');el.className='toast';el.textContent=t;document.body.appendChild(el);setTimeout(()=>el.remove(),1800)}
@@ -780,7 +827,6 @@ document.addEventListener('click',e=>{
   switch(a){
     case 'sAge':setupState.age=+v;renderSetup();break;
     case 'sBuddy':setupState.buddy=v;renderSetup();break;
-    case 'demo':S=defaults();S.profile={name:'Aarav',age:7,buddy:'🐘'};S.pin='1234';fillDemo();screen='home';render();toast('Sample child loaded · PIN 1234');break;
     case 'play':if(gate()){screen='home';render();break}if(v==='trace'){screen='tracepick';render();break}startRound(v);break;
     case 'tmode':tMode=v;try{S.tmode=v;save()}catch(_){}renderTracePick();break;
     case 'tstart':startTrace(v);break;
@@ -800,19 +846,35 @@ document.addEventListener('click',e=>{
     case 'parent':askPin('Grown-ups only',()=>{screen='parent';parentTab='report';reportYM=ymOf();render()});break;
     case 'extra':askPin('Add 10 minutes',()=>{S.extra[dkey()]=(S.extra[dkey()]||0)+10;save();screen='home';render();toast('10 minutes added')});break;
     case 'unbed':askPin('Open games for today',()=>{S.bedOk=dkey();save();screen='home';render()});break;
-    case 'pk':if(pinBuf.length<4){pinBuf+=v;const t=document.getElementById('pinov').dataset.title;if(pinBuf.length===4){if(pinBuf===S.pin){const cb=pinCb;closePin();cb&&cb()}else{pinBuf='';drawPin(t,'That PIN is not right. Try again.')}}else drawPin(t,'')}break;
+    case 'pk':{const t=document.getElementById('pinov').dataset.title;if(locked()){pinBuf='';drawPin(t,lockMsg());break}if(pinBuf.length>=4||pinBusy)break;pinBuf+=v;
+      if(pinBuf.length<4){drawPin(t,'');break}const tryPin=pinBuf;pinBusy=true;drawPin(t,'Checking…');
+      checkPin(tryPin).then(ok=>{pinBusy=false;pinBuf='';if(ok){ROOT.sec.fails=0;ROOT.sec.lockUntil=0;save();const cb=pinCb;closePin();cb&&cb()}else{failTry();drawPin(t,locked()?lockMsg():`That PIN is not right. ${Math.max(0,5-ROOT.sec.fails)} tries left before a short lock.`)}});break}
     case 'pdel':pinBuf=pinBuf.slice(0,-1);drawPin(document.getElementById('pinov').dataset.title,'');break;
     case 'pcancel':closePin();break;
     case 'forgot':showForgot();break;
-    case 'fqok':{const val=+document.getElementById('fq').value;if(val===forgotQ){S.pin='0000';save();closePin();toast('PIN reset to 0000. Change it in Controls.')}else document.getElementById('fqe').textContent='Not quite. Try again.';break}
-    case 'ptab':parentTab=v;renderParent();break;
+    case 'fqok':{if(locked()){showForgot(lockMsg());break}const code=document.getElementById('fq').value.toUpperCase().replace(/[^A-Z0-9]/g,''),np=document.getElementById('fp').value.trim();
+      if(!/^\d{4}$/.test(np)){document.getElementById('fqe').textContent='New PIN must be 4 numbers.';break}
+      if(!ROOT.recHash){showForgot('No recovery code was set up on this device.');break}
+      kdf(code,ROOT.recSalt).then(h=>{if(h===ROOT.recHash){ROOT.sec.fails=0;ROOT.sec.lockUntil=0;setPin(np).then(()=>{closePin();toast('PIN changed')})}else{failTry();showForgot(locked()?lockMsg():'That code is not right.')}});break}
+    case 'recdone':recCode='';screen='home';render();break;
+    case 'newrec':setRecovery().then(c=>{const o=document.getElementById('recout');if(o)o.innerHTML=`<div class="insight">🔑<div><b style="letter-spacing:.1em;user-select:all;-webkit-user-select:all">${c}</b><br>Your new recovery code. Write it down. The old one no longer works.</div></div>`});break;
+    case 'unclock':askPin('Unlock games',()=>{ROOT.sec.clock=0;ROOT.sec.lastSeen=Date.now();save();screen='home';render()});break;
+    case 'kadd':addKid={name:'',age:6,buddy:'🐰',daily:20};renderParent();break;
+    case 'kcancel':addKid=null;renderParent();break;
+    case 'kAge':addKid.name=document.getElementById('kName').value;addKid.daily=+document.getElementById('kDaily').value;addKid.age=+v;renderParent();break;
+    case 'kBuddy':addKid.name=document.getElementById('kName').value;addKid.daily=+document.getElementById('kDaily').value;addKid.buddy=v;renderParent();break;
+    case 'ksave':{const n=document.getElementById('kName').value.trim();if(!n){toast('Please type a name');break}const k=defaults();k.profile={name:n,age:addKid.age,buddy:addKid.buddy};k.settings.daily=+document.getElementById('kDaily').value;const id=newId();ROOT.kids[id]=k;addKid=null;save();renderParent();toast(n+' added. Tap Switch to play as '+n+'.');break}
+    case 'kidswitch':if(ROOT.kids[v]){S.brk={d:dkey(),s:sinceBreak};useKid(v);save();renderParent();toast('Now playing: '+S.profile.name)}break;
+    case 'kiddel':delKid=v;renderParent();break;
+    case 'kiddel2':if(Object.keys(ROOT.kids).length>1&&ROOT.kids[v]){delete ROOT.kids[v];if(ROOT.active===v)useKid(Object.keys(ROOT.kids)[0]);delKid=null;save();renderParent();toast('Removed')}break;
+    case 'ptab':parentTab=v;addKid=null;delKid=null;renderParent();break;
     case 'mprev':reportYM=prevYM(reportYM);renderParent();break;
     case 'mnext':if(reportYM<ymOf()){reportYM=nextYM(reportYM);renderParent()}break;
     case 'pAge':S.profile.age=+v;save();renderParent();toast('Age saved. Games adjust to match.');break;
     case 'pBuddy':S.profile.buddy=v;save();renderParent();break;
     case 'tog':S.settings[v]=!S.settings[v];save();renderParent();break;
     case 'sub':{const n=SKILLS.filter(s=>S.settings.subjects[s.id]).length;if(S.settings.subjects[v]&&n<=1){toast('Keep at least one game on');break}S.settings.subjects[v]=!S.settings.subjects[v];save();renderParent();break}
-    case 'setpin':{const p=document.getElementById('pPin').value.trim();if(/^\d{4}$/.test(p)){S.pin=p;save();toast('PIN changed')}else toast('PIN must be 4 numbers');break}
+    case 'setpin':{const p=document.getElementById('pPin').value.trim();if(/^\d{4}$/.test(p)){setPin(p).then(()=>{document.getElementById('pPin').value='';toast('PIN changed')})}else toast('PIN must be 4 numbers');break}
     case 'loaddemo':fillDemo();parentTab='report';renderParent();toast('Sample months added');break;
     case 'askreset':document.getElementById('dz').innerHTML='<span style="flex:1">This deletes all stars and reports on this device.</span><button class="btn sm alt" data-act="ptab" data-v="settings">Keep</button><button class="btn sm" style="background:var(--bad);box-shadow:0 4px 0 #9A3216" data-act="doreset">Yes, clear</button>';break;
     case 'doreset':S.log={};S.extra={};S.demo=false;S.levels=Object.fromEntries(SKILLS.map(s=>[s.id,2]));save();renderParent();toast('Progress cleared');break;
@@ -820,15 +882,21 @@ document.addEventListener('click',e=>{
 });
 
 // ---------- play timer (counts only while a child screen is visible)
+let parentLast=0;function parentTouch(){parentLast=Date.now()}
+document.addEventListener('pointerdown',()=>{if(screen==='parent')parentTouch()},true);
 setInterval(()=>{
   if(!S||document.visibilityState!=='visible')return;
+  const now=Date.now(),ls=ROOT.sec.lastSeen||0;
+  if(ls&&now<ls-10*60000&&!ROOT.sec.clock){ROOT.sec.clock=1;save();if(screen!=='parent'){R=null;screen='lock-clock';render()}return}
+  if(now>ls)ROOT.sec.lastSeen=now;
+  if(screen==='parent'&&now-parentLast>3*60000){screen='home';render();toast('Grown-ups area locked');return}
   if(!['home','round','memory','result','stars','tracepick','trace','traceend'].includes(screen))return;
   const d=day();d.sec=(d.sec||0)+1;sinceBreak++;
-  if(d.sec%10===0)save();
+  if(d.sec%10===0){S.brk={d:dkey(),s:sinceBreak};save()}
   const el=document.getElementById('tleft');if(el){const m=Math.ceil(remainSec()/60);el.textContent=m;document.getElementById('timer').classList.toggle('low',m<=3)}
   if((screen==='home'||screen==='stars')){if(gate()){save();render()}else if(S.settings.breakEvery>0&&sinceBreak>=S.settings.breakEvery*60){startBreak()}}
 },1000);
-document.addEventListener('visibilitychange',()=>{if(S)save()});
+document.addEventListener('visibilitychange',()=>{if(!S)return;S.brk={d:dkey(),s:sinceBreak};save();if(document.visibilityState==='hidden'&&screen==='parent'){closePin();screen='home';render()}});
 
 render();
 })();
