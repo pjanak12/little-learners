@@ -1,0 +1,15 @@
+{
+  "name": "Little Learners Garden",
+  "short_name": "Little Learners",
+  "description": "Gentle learning games for ages 6 to 8.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#E3F3FB",
+  "theme_color": "#FFFFFF",
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}
